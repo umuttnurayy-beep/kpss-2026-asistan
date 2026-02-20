@@ -5,21 +5,39 @@ import gspread
 import json
 import os
 
-# --- GOOGLE SHEETS BAĞLANTISI ---
-try:
-    if os.path.exists('kpss_kimlik.json'):
-        # Bilgisayarda çalışırken (Senin bilgisayarın)
-        gc = gspread.service_account(filename='kpss_kimlik.json')
-    else:
-        # İnternette (Telefondan girilen web sitesi) çalışırken
-        kimlik_dict = json.loads(st.secrets["google_sifrem"])
-        gc = gspread.service_account_from_dict(kimlik_dict)
-        
-    sh = gc.open('KPSS_Veritabani')
-    ws_takip = sh.worksheet('Takip')
-    ws_yanlis = sh.worksheet('Yanlis_Defteri')
-except Exception as e:
-    st.error(f"Google Bağlantı Hatası! Detay: {e}")
+# --- GOOGLE SHEETS BAĞLANTISI (Hata Toleranslı Versiyon) ---
+@st.cache_resource
+def get_gspread_client():
+    try:
+        # 1. Bilgisayarda yerel dosya varsa onu kullan
+        if os.path.exists('kpss_kimlik.json'):
+            return gspread.service_account(filename='kpss_kimlik.json')
+        # 2. İnternette Streamlit Secrets varsa onu kullan
+        elif "google_sifrem" in st.secrets:
+            creds_json = st.secrets["google_sifrem"]
+            # Eğer veri string olarak geldiyse JSON'a çevir, sözlükse direkt kullan
+            if isinstance(creds_json, str):
+                creds_dict = json.loads(creds_json, strict=False)
+            else:
+                creds_dict = dict(creds_json)
+            return gspread.service_account_from_dict(creds_dict)
+        else:
+            st.error("Kimlik bilgileri bulunamadı! kpss_kimlik.json veya Secrets ayarını kontrol edin.")
+            return None
+    except Exception as e:
+        st.error(f"Bağlantı Kurulamadı: {e}")
+        return None
+
+gc = get_gspread_client()
+if gc:
+    try:
+        sh = gc.open('KPSS_Veritabani')
+        ws_takip = sh.worksheet('Takip')
+        ws_yanlis = sh.worksheet('Yanlis_Defteri')
+    except Exception as e:
+        st.error(f"E-Tablo sayfalarına erişilemedi: {e}")
+        st.stop()
+else:
     st.stop()
 
 def verileri_yukle(worksheet, kolonlar):
