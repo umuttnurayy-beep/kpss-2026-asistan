@@ -5,39 +5,47 @@ import gspread
 import json
 import os
 
-# --- GOOGLE SHEETS BAĞLANTISI (Hata Toleranslı Versiyon) ---
+# --- GOOGLE SHEETS BAĞLANTISI ---
 @st.cache_resource
 def get_gspread_client():
     try:
         # 1. Bilgisayarda yerel dosya varsa onu kullan
         if os.path.exists('kpss_kimlik.json'):
             return gspread.service_account(filename='kpss_kimlik.json')
-        # 2. İnternette Streamlit Secrets varsa onu kullan
+        
+        # 2. İnternette (Secrets) üzerinden bağlan
         elif "google_sifrem" in st.secrets:
-            creds_json = st.secrets["google_sifrem"]
-            # Eğer veri string olarak geldiyse JSON'a çevir, sözlükse direkt kullan
-            if isinstance(creds_json, str):
-                creds_dict = json.loads(creds_json, strict=False)
+            # Secrets içindeki veriyi al
+            creds_data = st.secrets["google_sifrem"]
+            
+            # Eğer veri string ise (tırnaklar içinde) sözlüğe çevir
+            if isinstance(creds_data, str):
+                creds_dict = json.loads(creds_data, strict=False)
             else:
-                creds_dict = dict(creds_json)
+                # Eğer Streamlit veriyi otomatik dict yaptıysa direkt kullan
+                creds_dict = dict(creds_data)
+                
             return gspread.service_account_from_dict(creds_dict)
         else:
-            st.error("Kimlik bilgileri bulunamadı! kpss_kimlik.json veya Secrets ayarını kontrol edin.")
             return None
     except Exception as e:
         st.error(f"Bağlantı Kurulamadı: {e}")
         return None
 
+# Bağlantıyı Başlat
 gc = get_gspread_client()
+
 if gc:
     try:
+        # Tablo isminin tam olarak 'KPSS_Veritabani' olduğundan emin ol
         sh = gc.open('KPSS_Veritabani')
         ws_takip = sh.worksheet('Takip')
         ws_yanlis = sh.worksheet('Yanlis_Defteri')
     except Exception as e:
-        st.error(f"E-Tablo sayfalarına erişilemedi: {e}")
+        st.error(f"E-Tablo sayfalarına erişilemedi (İsimleri kontrol et!): {e}")
         st.stop()
 else:
+    st.warning("Kimlik bilgileri bekleniyor... Lütfen Secrets ayarlarını kontrol edin.")
     st.stop()
 
 def verileri_yukle(worksheet, kolonlar):
@@ -67,106 +75,60 @@ menu = st.sidebar.radio("Modül Seçiniz:", ("Ana Sayfa (Dashboard)", "Çalışm
 # --- MODÜL 1: ANA SAYFA ---
 if menu == "Ana Sayfa (Dashboard)":
     st.title("🎯 KPSS 2026 Lisans - Bulut Asistanı ☁️")
-    
     bugun = date.today()
     sinav_tarihi = date(2026, 9, 6)
     kalan_gun = (sinav_tarihi - bugun).days
-    
     st.markdown(f"### ⏳ Sınava Kalan Süre: **{kalan_gun} Gün**")
     st.progress(max(0.0, min(1.0, 1.0 - (kalan_gun / 195)))) 
     st.divider()
     
     st.subheader("📊 Ders İlerleme Durumu")
     df_takip = verileri_yukle(ws_takip, ["Ders", "Konu", "Pegem_Video", "Konu_Kitabi", "Soru_Bankasi", "Kisisel_Not"])
-    
     if not df_takip.empty:
         df_takip = df_takip.drop_duplicates(subset=['Ders', 'Konu'], keep='last')
     
     col1, col2 = st.columns(2)
     with col1:
         st.markdown("#### 🧠 Genel Yetenek")
-        gy_dersler = ["Türkçe", "Matematik", "Geometri"]
-        for d in gy_dersler:
-            toplam_konu = len(dersler[d])
-            biten_konu = len(df_takip[(df_takip['Ders'] == d) & ((df_takip['Soru_Bankasi'] == "Evet") | (df_takip['Soru_Bankasi'] == True))]) if not df_takip.empty else 0
-            yuzde = biten_konu / toplam_konu if toplam_konu > 0 else 0
-            st.write(f"**{d}** - *{biten_konu} / {toplam_konu} Konu Bitti*")
-            st.progress(yuzde)
-            
+        for d in ["Türkçe", "Matematik", "Geometri"]:
+            toplam = len(dersler[d])
+            biten = len(df_takip[(df_takip['Ders'] == d) & (df_takip['Soru_Bankasi'].isin(["Evet", True]))]) if not df_takip.empty else 0
+            st.write(f"**{d}** - *{biten}/{toplam}*")
+            st.progress(biten/toplam if toplam > 0 else 0)
     with col2:
         st.markdown("#### 🌍 Genel Kültür")
-        gk_dersler = ["Tarih", "Coğrafya", "Vatandaşlık"]
-        for d in gk_dersler:
-            toplam_konu = len(dersler[d])
-            biten_konu = len(df_takip[(df_takip['Ders'] == d) & ((df_takip['Soru_Bankasi'] == "Evet") | (df_takip['Soru_Bankasi'] == True))]) if not df_takip.empty else 0
-            yuzde = biten_konu / toplam_konu if toplam_konu > 0 else 0
-            st.write(f"**{d}** - *{biten_konu} / {toplam_konu} Konu Bitti*")
-            st.progress(yuzde)
+        for d in ["Tarih", "Coğrafya", "Vatandaşlık"]:
+            toplam = len(dersler[d])
+            biten = len(df_takip[(df_takip['Ders'] == d) & (df_takip['Soru_Bankasi'].isin(["Evet", True]))]) if not df_takip.empty else 0
+            st.write(f"**{d}** - *{biten}/{toplam}*")
+            st.progress(biten/toplam if toplam > 0 else 0)
 
 # --- MODÜL 2: ÇALIŞMA TAKİBİ ---
 elif menu == "Çalışma Takibi & Notlar":
-    df_takip = verileri_yukle(ws_takip, ["Ders", "Konu", "Pegem_Video", "Konu_Kitabi", "Soru_Bankasi", "Kisisel_Not"])
-    
-    st.title("📅 Konu Takip Sistemi (Bulut)")
-    secilen_ders = st.selectbox("Çalıştığın Dersi Seç:", list(dersler.keys()), key="takip_ders")
-    secilen_konu = st.selectbox("Konuyu Seç:", dersler[secilen_ders], key="takip_konu")
-    
-    st.markdown(f"### 📌 {secilen_ders} - {secilen_konu}")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        video_izlendi = st.checkbox("📺 Pegem Canlı Ders/Video İzlendi")
-        konu_calisildi = st.checkbox("📖 Konu Anlatım Kitabından Okundu")
-        soru_cozuldu = st.checkbox("📝 Soru Bankası Testleri Bitti")
-    
-    with col2:
-        alinan_not = st.text_area("Bu konuyla ilgili kendi notların:", placeholder="Örn: Bu konudan çok soru kaçırdım...")
-    
-    if st.button("☁️ Buluta Kaydet"):
-        yeni_satir = [
-            secilen_ders, secilen_konu, 
-            "Evet" if video_izlendi else "Hayır", 
-            "Evet" if konu_calisildi else "Hayır", 
-            "Evet" if soru_cozuldu else "Hayır", 
-            alinan_not
-        ]
-        ws_takip.append_row(yeni_satir)
-        st.success("Google E-Tablolara başarıyla kaydedildi!")
+    st.title("📅 Konu Takip Sistemi")
+    sec_ders = st.selectbox("Ders:", list(dersler.keys()))
+    sec_konu = st.selectbox("Konu:", dersler[sec_ders])
+    v = st.checkbox("📺 Video")
+    k = st.checkbox("📖 Kitap")
+    s = st.checkbox("📝 Soru Bankası")
+    n = st.text_area("Notlar:")
+    if st.button("💾 Kaydet"):
+        ws_takip.append_row([sec_ders, sec_konu, "Evet" if v else "Hayır", "Evet" if k else "Hayır", "Evet" if s else "Hayır", n])
+        st.success("Kaydedildi!")
         st.rerun()
-
-    st.divider()
-    st.subheader("📚 Kaydedilen Çalışmalarım")
-    st.dataframe(df_takip.iloc[::-1], use_container_width=True)
+    df_t = verileri_yukle(ws_takip, [])
+    st.dataframe(df_t.iloc[::-1])
 
 # --- MODÜL 3: YANLIŞ DEFTERİ ---
 elif menu == "Yanlış Defteri":
-    df_yanlis = verileri_yukle(ws_yanlis, ["Ders", "Konu", "Kaynak", "Hata_Sebebi", "Soru_Ozeti", "Dogru_Cozum"])
-    
-    st.title("📝 Yanlış Defteri (Bulut)")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        y_ders = st.selectbox("Hata Yapılan Ders:", list(dersler.keys()), key="yanlis_ders")
-        y_konu = st.selectbox("Hata Yapılan Konu:", dersler[y_ders], key="yanlis_konu")
-        y_kaynak = st.text_input("Hangi Kaynak?")
-        
-    with col2:
-        y_sebep = st.selectbox("Hata Sebebi Nedir?", [
-            "Bilgi Eksikliği", "Dikkat Hatası", "İşlem Hatası", "İki Şık Arasında Kaldım", "Süreyi Yetiştiremedim"
-        ])
-        
-    y_soru = st.text_area("Sorunun Metni veya Kısa Özeti:")
-    y_dogru = st.text_area("✨ Doğru Çözüm / Öğrenilen Bilgi:")
-    
-    if st.button("☁️ Yanlışı Buluta Kaydet"):
-        if y_soru == "" or y_dogru == "":
-            st.warning("Lütfen soru özetini ve çözümünü gir!")
-        else:
-            yeni_satir = [y_ders, y_konu, y_kaynak, y_sebep, y_soru, y_dogru]
-            ws_yanlis.append_row(yeni_satir)
-            st.success("Yanlış defterine eklendi! Google Drive'dan da görebilirsin.")
-            st.rerun()
-            
-    st.divider()
-    st.subheader("🔍 Kayıtlı Yanlışlarım")
-    st.dataframe(df_yanlis.iloc[::-1], use_container_width=True)
+    st.title("📝 Yanlış Defteri")
+    y_d = st.selectbox("Ders:", list(dersler.keys()), key="y1")
+    y_k = st.selectbox("Konu:", dersler[y_d], key="y2")
+    y_s = st.text_area("Soru Özeti:")
+    y_c = st.text_area("Doğru Çözüm:")
+    if st.button("❌ Yanlışı Kaydet"):
+        ws_yanlis.append_row([y_d, y_k, "", "", y_s, y_c])
+        st.success("Eklendi!")
+        st.rerun()
+    df_y = verileri_yukle(ws_yanlis, [])
+    st.dataframe(df_y.iloc[::-1])
